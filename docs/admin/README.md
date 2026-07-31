@@ -64,6 +64,11 @@ re-prompted. Attachment bytes are fetched through the authenticated API and
 rendered from object URLs, because `<img src>` and `<a href>` cannot carry an
 `Authorization` header.
 
+In token mode, each new browser session issues one unauthenticated probe that
+returns `401` by design before the token is entered. If you alert on admin-API
+`401`s, exclude these single-probe sequences (one `401` immediately followed by
+authenticated requests from the same session) to avoid false positives.
+
 The shared token authenticates the deployment operator role, not a person. It
 carries no per-operator identity, attribution, or individual revocation —
 rotating it revokes access for everyone at once.

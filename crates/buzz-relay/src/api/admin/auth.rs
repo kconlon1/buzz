@@ -1,7 +1,7 @@
 use axum::http::{header, HeaderMap};
 
 use super::error::ApiError;
-use crate::config::AdminToken;
+use crate::config::{AdminAuth, AdminToken};
 use crate::state::AppState;
 
 pub(crate) fn is_admin_host(state: &AppState, headers: &HeaderMap) -> bool {
@@ -21,15 +21,12 @@ pub fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> 
         .as_ref()
         .ok_or_else(ApiError::not_found)?;
     // Credential first: an unauthenticated caller learns nothing about which
-    // Host or Origin the deployment expects. In insecure_no_auth mode the
+    // Host or Origin the deployment expects. In InsecureNoAuth mode the
     // bearer check is skipped — the operator has asserted that network-layer
     // controls substitute for it.
-    if !config.insecure_no_auth {
-        let token = config
-            .token
-            .as_ref()
-            .expect("token is always Some when insecure_no_auth is false");
-        authorize_bearer(token, headers)?;
+    match &config.auth {
+        AdminAuth::Token(token) => authorize_bearer(token, headers)?,
+        AdminAuth::InsecureNoAuth => {}
     }
     if !is_admin_host(state, headers) {
         return Err(ApiError::forbidden());

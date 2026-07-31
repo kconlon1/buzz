@@ -344,8 +344,7 @@ mod tests {
         hex::decode_to_slice(TOKEN, &mut token).expect("test token is hex");
         config.admin = Some(crate::config::AdminConfig {
             host: "admin.example".to_string(),
-            token: Some(crate::config::AdminToken::from_bytes(token)),
-            insecure_no_auth: false,
+            auth: crate::config::AdminAuth::Token(crate::config::AdminToken::from_bytes(token)),
             web_dir: None,
         });
         let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
@@ -387,8 +386,7 @@ mod tests {
         config.redis_url = "redis://127.0.0.1:1".to_string();
         config.admin = Some(crate::config::AdminConfig {
             host: "admin.example".to_string(),
-            token: None,
-            insecure_no_auth: true,
+            auth: crate::config::AdminAuth::InsecureNoAuth,
             web_dir: None,
         });
         let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");

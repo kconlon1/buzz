@@ -24,19 +24,28 @@ pub enum ConfigError {
     InvalidValue(String),
 }
 
+/// Authentication mode for the deployment-admin API.
+///
+/// Exactly one variant is active; the invalid states (`token: None` +
+/// `insecure_no_auth: false`, or `token: Some` + `insecure_no_auth: true`)
+/// are not representable.
+#[derive(Debug, Clone)]
+pub enum AdminAuth {
+    /// Operator bearer credential required on every request.
+    Token(AdminToken),
+    /// Bearer authentication disabled. The operator has explicitly asserted
+    /// that the admin API is protected at the network layer (reverse proxy,
+    /// VPN, firewall). `Host`/`Origin` checks remain active as defense-in-depth.
+    InsecureNoAuth,
+}
+
 /// Deny-by-default read-only deployment-admin configuration.
 #[derive(Debug, Clone)]
 pub struct AdminConfig {
     /// Exact admin HTTP authority.
     pub host: String,
-    /// Operator bearer credential required on every admin API request.
-    /// `None` when the operator has set `BUZZ_ADMIN_INSECURE_NO_AUTH=true`.
-    pub token: Option<AdminToken>,
-    /// When `true`, bearer authentication is disabled. The operator has
-    /// explicitly asserted that the admin API is protected at the network
-    /// layer (reverse proxy, VPN, firewall). `Host`/`Origin` checks remain
-    /// active as defense-in-depth.
-    pub insecure_no_auth: bool,
+    /// Authentication mode selected at startup.
+    pub auth: AdminAuth,
     /// Optional admin SPA bundle directory.
     pub web_dir: Option<std::path::PathBuf>,
 }
@@ -984,15 +993,15 @@ impl Config {
                     ));
                 }
 
-                let token = if insecure_no_auth {
+                let auth = if insecure_no_auth {
                     tracing::warn!(
                         "BUZZ_ADMIN_INSECURE_NO_AUTH=true — the admin API is \
                          unauthenticated; the operator has asserted that access is \
                          controlled at the network layer (reverse proxy, VPN, firewall)"
                     );
-                    None
+                    AdminAuth::InsecureNoAuth
                 } else {
-                    Some(parse_admin_token()?)
+                    AdminAuth::Token(parse_admin_token()?)
                 };
 
                 let web_dir = std::env::var("BUZZ_ADMIN_WEB_DIR")
@@ -1009,8 +1018,7 @@ impl Config {
                 }
                 Some(AdminConfig {
                     host,
-                    token,
-                    insecure_no_auth,
+                    auth,
                     web_dir,
                 })
             }
@@ -1244,13 +1252,14 @@ mod tests {
             .expect("config with a valid admin token")
             .admin
             .expect("admin surface is configured");
-            let mut expected = [0u8; 32];
-            hex::decode_to_slice(VALID_ADMIN_TOKEN, &mut expected).expect("hex fixture");
             assert_eq!(admin.host, "admin.example");
-            assert!(!admin.insecure_no_auth);
-            let token = admin.token.expect("token must be present in token mode");
-            assert!(token.matches(&expected));
-            assert!(!token.matches(&[0u8; 32]));
+            assert!(
+                matches!(admin.auth, crate::config::AdminAuth::Token(ref t) if {
+                    let mut expected = [0u8; 32];
+                    hex::decode_to_slice(VALID_ADMIN_TOKEN, &mut expected).expect("hex fixture");
+                    t.matches(&expected) && !t.matches(&[0u8; 32])
+                })
+            );
         }
     }
 
@@ -1315,8 +1324,10 @@ mod tests {
         .admin
         .expect("admin surface is configured");
         assert_eq!(admin.host, "admin.example");
-        assert!(admin.insecure_no_auth);
-        assert!(admin.token.is_none());
+        assert!(matches!(
+            admin.auth,
+            crate::config::AdminAuth::InsecureNoAuth
+        ));
     }
 
     #[test]
