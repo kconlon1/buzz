@@ -899,3 +899,64 @@ test("test_fixture_invalid_avatar_url_https_over_2048_is_rejected_by_ts", () => 
     "over-2048 HTTPS URL avatar must mark the member invalid",
   );
 });
+
+// ── URL predicate parity (parse-based, UTF-8 byte cap) ───────────────────
+//
+// These fixtures verify that the Rust is_safe_catalog_avatar_url and the
+// TypeScript isSafeHttpUrl now share the same parser and length metric.
+
+test("test_fixture_invalid_avatar_url_malformed_port_is_rejected_by_ts", () => {
+  // https://a:b — "b" is not a valid port; new URL() throws.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_avatar_url_malformed_port.json"),
+  );
+  assert.ok(result !== null, "top-level body is parseable");
+  assert.ok(
+    result.invalidMemberCount >= 1,
+    "malformed-port URL must mark the member invalid",
+  );
+});
+
+test("test_fixture_valid_avatar_url_uppercase_scheme_is_accepted_by_ts", () => {
+  // HTTPS://example.com — new URL() normalises the scheme; accepted.
+  // The old Rust code (starts_with lowercase) rejected this; new parse accepts it.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("valid_avatar_url_uppercase_scheme.json"),
+  );
+  assert.ok(
+    result !== null,
+    "valid_avatar_url_uppercase_scheme.json must be parseable",
+  );
+  assert.equal(
+    result.invalidMemberCount,
+    0,
+    "uppercase-scheme URL must be accepted as valid",
+  );
+});
+
+test("test_fixture_valid_avatar_url_non_ascii_at_utf8_limit_is_accepted_by_ts", () => {
+  // https://a/ + 1019 é = 2048 UTF-8 bytes = at cap. byteLength accepts it.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("valid_avatar_url_non_ascii_at_utf8_limit.json"),
+  );
+  assert.ok(result !== null, "non_ascii_at_utf8_limit must be parseable");
+  assert.equal(
+    result.invalidMemberCount,
+    0,
+    "URL exactly at 2048 UTF-8 bytes must be accepted",
+  );
+});
+
+test("test_fixture_invalid_avatar_url_non_ascii_over_utf8_limit_is_rejected_by_ts", () => {
+  // https://a/ + 1020 é = 2050 UTF-8 bytes > cap. byteLength rejects it.
+  // 1030 UTF-16 code units < 2048, so the old value.length check would have
+  // accepted it — this is the exact Thufir-reproduced split.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_avatar_url_non_ascii_over_utf8_limit.json"),
+  );
+  assert.ok(result !== null, "top-level body is parseable");
+  assert.ok(
+    result.invalidMemberCount >= 1,
+    "URL 2050 UTF-8 bytes (but 1030 UTF-16 units) must mark the member invalid",
+  );
+});

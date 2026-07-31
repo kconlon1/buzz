@@ -150,6 +150,30 @@ fn test_tombstone_transaction_rolls_back_delete_when_insert_fails() {
 // Shared fixtures that exercise the exact cases where Rust and TypeScript
 // previously diverged: blank team names and HTTP/HTTPS URL constraints.
 
+#[test]
+fn test_url_parse_smoke() {
+    // Verify url::Url::parse behavior for the cases that diverged before.
+    // These do NOT need to be fixtures — they verify the Rust parse semantics
+    // match what we expect before the fixture tests assert the shared contract.
+    assert!(
+        is_safe_catalog_avatar_url("HTTPS://example.com"),
+        "uppercase scheme must be accepted"
+    );
+    assert!(
+        !is_safe_catalog_avatar_url("https://^"),
+        "caret-in-host must be rejected by parser"
+    );
+    assert!(
+        !is_safe_catalog_avatar_url("https://a b.png"),
+        "space-in-path must be rejected"
+    );
+    // url::Url::parse accepts https://a:1234 (host a, port 1234)
+    assert!(
+        is_safe_catalog_avatar_url("https://a:1234"),
+        "host:port form must be accepted"
+    );
+}
+
 /// Deserialize a JSON fixture body into a signed event for validation testing.
 fn fixture_event(content_str: &str) -> nostr::Event {
     let keys = nostr::Keys::generate();
@@ -215,5 +239,70 @@ fn test_fixture_invalid_avatar_url_https_over_2048_is_rejected() {
     assert!(
         team_catalog_content_from_event(&event).is_err(),
         "invalid_avatar_url_https_over_2048.json must be rejected"
+    );
+}
+
+#[test]
+fn test_fixture_invalid_avatar_url_malformed_port_is_rejected() {
+    // https://a:b — "b" is not a valid port number; url::Url::parse rejects it.
+    // TS new URL("https://a:b") also throws.
+    let event = fixture_event(
+        include_str!(
+            "../../../tests/fixtures/team_catalog_content/invalid_avatar_url_malformed_port.json"
+        )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_avatar_url_malformed_port.json must be rejected"
+    );
+}
+
+#[test]
+fn test_fixture_valid_avatar_url_uppercase_scheme_is_accepted() {
+    // HTTPS://example.com — url::Url::parse normalises the scheme; its
+    // parsed scheme is "https". The old lowercase starts_with rejected this
+    // while TS new URL() (which also normalises) accepted it.
+    let event = fixture_event(
+        include_str!(
+            "../../../tests/fixtures/team_catalog_content/valid_avatar_url_uppercase_scheme.json"
+        )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_ok(),
+        "valid_avatar_url_uppercase_scheme.json must be accepted"
+    );
+}
+
+#[test]
+fn test_fixture_valid_avatar_url_non_ascii_at_utf8_limit_is_accepted() {
+    // https://a/ + 1019 é = 2048 UTF-8 bytes (at the limit) but only
+    // 1029 UTF-16 code units.  Both sides cap at 2048 UTF-8 bytes, so
+    // both accept this URL.
+    let event = fixture_event(
+        include_str!(
+        "../../../tests/fixtures/team_catalog_content/valid_avatar_url_non_ascii_at_utf8_limit.json"
+    )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_ok(),
+        "valid_avatar_url_non_ascii_at_utf8_limit.json must be accepted"
+    );
+}
+
+#[test]
+fn test_fixture_invalid_avatar_url_non_ascii_over_utf8_limit_is_rejected() {
+    // https://a/ + 1020 é = 2050 UTF-8 bytes (over the limit) but only
+    // 1030 UTF-16 code units.  The old TS code used value.length (1030 < 2048)
+    // and would have accepted this; the new code uses byteLength (2050 > 2048)
+    // and rejects it, matching Rust.  This is the exact split Thufir reproduced.
+    let event = fixture_event(include_str!(
+        "../../../tests/fixtures/team_catalog_content/invalid_avatar_url_non_ascii_over_utf8_limit.json"
+    ).trim());
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_avatar_url_non_ascii_over_utf8_limit.json must be rejected"
     );
 }

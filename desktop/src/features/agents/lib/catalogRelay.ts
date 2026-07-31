@@ -51,10 +51,19 @@ function eventIsShared(event: RelayEvent): boolean {
 }
 
 function isSafeHttpUrl(value: unknown): value is string {
+  // Length cap in UTF-8 bytes — same unit as the Rust is_safe_catalog_avatar_url
+  // cap. This deliberately differs from `value.length` (UTF-16 code units) so
+  // both sides agree for non-ASCII input (e.g. URLs with encoded emoji).
+  //
+  // byteLength is defined locally here (and identically in teamCatalogRelay.ts)
+  // so catalogRelay.ts stays self-contained.
+  function byteLength(s: string): number {
+    return new TextEncoder().encode(s).length;
+  }
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    value.length > 2_048 ||
+    byteLength(value) > 2_048 ||
     /[\s()]/u.test(value)
   ) {
     return false;

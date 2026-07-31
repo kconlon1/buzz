@@ -328,47 +328,56 @@ pub fn local_member_projection_hash(record: &AgentDefinition) -> String {
 
 /// Validate an avatar URL against the catalog-safe allowlist.
 ///
-/// Mirrors `safeCatalogAvatarUrl` in `catalogRelay.ts` — both validators
-/// share the same set of permitted forms so a publisher and a TS-side display
-/// reader agree on what "safe" means:
+/// Shared contract with `safeCatalogAvatarUrl` / `isSafeHttpUrl` in
+/// `catalogRelay.ts`. The two sides must accept and reject the same inputs so
+/// a publisher and a TS-side display reader always agree.
 ///
-/// - `http://` or `https://` URLs: ≤ 2 048 chars, must parse as a valid URL
-///   (no bare `https://`), and must not contain whitespace or parentheses —
-///   exact parity with the TypeScript `isSafeHttpUrl` predicate.
-/// - Inline SVG: `data:image/svg+xml,…` up to 8 192 chars
+/// **Length metric: UTF-8 bytes** — the relay's native encoding and the same
+/// unit used by every other field bound in this module. TypeScript uses the
+/// existing `byteLength` helper to match (JS `value.length` counts UTF-16
+/// code units, which diverges for non-ASCII input).
+///
+/// Permitted forms:
+/// - `http://` or `https://` URLs that parse cleanly via `url::Url::parse`,
+///   scheme compared case-insensitively, and whose UTF-8 byte length is ≤ 2 048.
+/// - Inline SVG: `data:image/svg+xml,…` up to 8 192 bytes
 /// - Inline raster (png/jpeg/gif/webp): `data:image/<type>;base64,<B64>` up
 ///   to 256 KiB with strict base64 shape
 ///
-/// A `javascript:` URL, an arbitrary `data:` scheme, or anything else returns
-/// false.
+/// A `javascript:` URL, an arbitrary `data:` scheme, unparseable strings like
+/// `https://^`, or anything else returns false.
 pub fn is_safe_catalog_avatar_url(url: &str) -> bool {
     const INLINE_SVG_PREFIX: &str = "data:image/svg+xml,";
     const MAX_INLINE_SVG_LEN: usize = 8_192;
     const MAX_INLINE_RASTER_LEN: usize = 256 * 1_024;
-    /// TypeScript caps HTTP/HTTPS URLs at 2 048 chars (`isSafeHttpUrl`).
-    const MAX_HTTP_URL_LEN: usize = 2_048;
+    /// HTTP/HTTPS URL cap in UTF-8 bytes — matches TypeScript's byteLength cap.
+    const MAX_HTTP_URL_BYTES: usize = 2_048;
 
-    if url.starts_with("https://") || url.starts_with("http://") {
-        // Enforce the TypeScript-identical contract:
-        //   - length ≤ 2 048 chars
-        //   - no whitespace or parentheses
-        //   - well-formed URL (minimal hostname after the scheme)
-        if url.len() > MAX_HTTP_URL_LEN {
+    // Fast path: only proceed for strings that look like they could be HTTP URLs.
+    // This avoids calling url::Url::parse on every data: string.
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        // UTF-8 byte length cap — same unit as TS byteLength.
+        if url.len() > MAX_HTTP_URL_BYTES {
             return false;
         }
+        // Reject URLs containing whitespace or parentheses, matching the
+        // TypeScript pre-check `/[\s()]/u.test(value)`. url::Url::parse
+        // percent-encodes spaces and accepts them, which would diverge from TS.
         if url
             .bytes()
             .any(|b| b.is_ascii_whitespace() || b == b'(' || b == b')')
         {
             return false;
         }
-        // Reject bare prefixes like `https://` with nothing after — a minimal
-        // valid HTTP URL needs at least a hostname (e.g. `http://a`).
-        let path_start = if url.starts_with("https://") { 8 } else { 7 };
-        if url.len() <= path_start {
-            return false;
-        }
-        return true;
+        // Require the URL to parse cleanly with the same case-insensitive
+        // semantics as TypeScript's new URL().  url::Url::parse rejects
+        // malformed authority components like https://^ or https://a:b
+        // that a prefix-only check would accept, and normalises the scheme
+        // so HTTPS://example.com is accepted just as TS accepts it.
+        return ::url::Url::parse(url)
+            .ok()
+            .is_some_and(|u| matches!(u.scheme(), "http" | "https"));
     }
     if url.starts_with(INLINE_SVG_PREFIX) {
         return url.len() <= MAX_INLINE_SVG_LEN;
@@ -398,7 +407,6 @@ pub fn is_safe_catalog_avatar_url(url: &str) -> bool {
     }
     false
 }
-
 fn bounded(value: &str, max: usize, label: &str) -> Result<(), String> {
     if value.len() > max {
         return Err(format!(
