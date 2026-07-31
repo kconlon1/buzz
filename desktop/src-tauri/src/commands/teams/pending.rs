@@ -297,7 +297,7 @@ pub(super) fn resolve_and_refresh_or_retract_at(
     }
 }
 
-/// Core of [`refresh_shared_team_catalog_head`], scope-free so it is
+/// Core of [`refresh_shared_team_catalog_head_resolving`], scope-free so it is
 /// testable without a Tauri `AppHandle`.
 pub(super) fn refresh_or_retract_shared_head_at(
     db_path: &std::path::Path,

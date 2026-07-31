@@ -339,16 +339,19 @@ fn test_oversized_avatar_on_a_non_builtin_fails_the_size_contract() {
 
 #[test]
 fn test_avatar_exactly_at_the_limit_is_accepted() {
-    // A safe https:// URL exactly at MAX_AVATAR_URL_BYTES must be accepted.
-    // The URL must pass both the byte bound and the safe-scheme check.
+    // A safe https:// URL exactly at the 2 048-char HTTP/HTTPS cap must be
+    // accepted. The URL must pass both the byte bound and the safe-scheme
+    // check. (Note: the v1 avatar field is bounded by `MAX_AVATAR_URL_BYTES`
+    // at the validate_member level; the HTTP/HTTPS cap is the tighter limit.)
+    const MAX_HTTP_URL_LEN: usize = 2_048;
     let url = format!(
         "https://example.com/{}",
-        "a".repeat(MAX_AVATAR_URL_BYTES - "https://example.com/".len())
+        "a".repeat(MAX_HTTP_URL_LEN - "https://example.com/".len())
     );
     assert_eq!(
         url.len(),
-        MAX_AVATAR_URL_BYTES,
-        "fixture must be exactly at limit"
+        MAX_HTTP_URL_LEN,
+        "fixture must be exactly at the 2 048-char HTTP/HTTPS limit"
     );
     let mut one = member("m1", "One");
     one.avatar_url = Some(url);

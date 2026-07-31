@@ -844,3 +844,58 @@ test("test_team_auto_retracted_notice_says_queued_not_removed", () => {
     `notice must reflect the pending-tombstone status; got: ${msg}`,
   );
 });
+
+// ── Validator contract boundary fixtures ─────────────────────────────────
+//
+// Shared fixtures that exercise the exact cases where Rust and TypeScript
+// previously diverged: blank team names and HTTP/HTTPS URL constraints.
+
+test("test_fixture_invalid_team_name_blank_is_rejected_by_ts", () => {
+  // Blank/whitespace team name must be rejected — TS checks
+  // `parsed.name.trim().length > 0`.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_team_name_blank.json"),
+  );
+  assert.equal(
+    result,
+    null,
+    "invalid_team_name_blank.json must be rejected by TS (null name fails top-level check)",
+  );
+});
+
+test("test_fixture_invalid_avatar_url_bare_https_is_rejected_by_ts", () => {
+  // Bare `https://` with no hostname must be rejected by TS `isSafeHttpUrl`
+  // (URL() constructor throws).
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_avatar_url_bare_https.json"),
+  );
+  assert.ok(result !== null, "top-level body is parseable");
+  assert.ok(
+    result.invalidMemberCount >= 1,
+    "bare https:// avatar URL must mark the member invalid",
+  );
+});
+
+test("test_fixture_invalid_avatar_url_whitespace_in_url_is_rejected_by_ts", () => {
+  // HTTPS URL with embedded whitespace must be rejected by TS `isSafeHttpUrl`.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_avatar_url_whitespace_in_url.json"),
+  );
+  assert.ok(result !== null, "top-level body is parseable");
+  assert.ok(
+    result.invalidMemberCount >= 1,
+    "whitespace-in-URL avatar must mark the member invalid",
+  );
+});
+
+test("test_fixture_invalid_avatar_url_https_over_2048_is_rejected_by_ts", () => {
+  // HTTPS URL > 2 048 chars must be rejected by TS `isSafeHttpUrl` length cap.
+  const result = parseTeamCatalogContent(
+    fixtureEvent("invalid_avatar_url_https_over_2048.json"),
+  );
+  assert.ok(result !== null, "top-level body is parseable");
+  assert.ok(
+    result.invalidMemberCount >= 1,
+    "over-2048 HTTPS URL avatar must mark the member invalid",
+  );
+});

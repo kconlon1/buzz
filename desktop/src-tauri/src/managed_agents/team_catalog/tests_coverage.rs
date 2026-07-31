@@ -144,3 +144,77 @@ fn test_tombstone_transaction_rolls_back_delete_when_insert_fails() {
         "DELETE must be rolled back when INSERT fails so the head is not lost"
     );
 }
+
+// ── Validator contract boundary fixtures ──────────────────────────────────
+//
+// Shared fixtures that exercise the exact cases where Rust and TypeScript
+// previously diverged: blank team names and HTTP/HTTPS URL constraints.
+
+/// Deserialize a JSON fixture body into a signed event for validation testing.
+fn fixture_event(content_str: &str) -> nostr::Event {
+    use nostr::JsonUtil;
+    let keys = nostr::Keys::generate();
+    nostr::EventBuilder::new(nostr::Kind::Custom(30178u16), content_str)
+        .sign_with_keys(&keys)
+        .unwrap()
+}
+
+#[test]
+fn test_fixture_invalid_team_name_blank_is_rejected() {
+    // A whitespace-only team name must be rejected — parity with TS
+    // `parsed.name.trim().length > 0`.
+    let event = fixture_event(
+        include_str!("../../../tests/fixtures/team_catalog_content/invalid_team_name_blank.json")
+            .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_team_name_blank.json must be rejected"
+    );
+}
+
+#[test]
+fn test_fixture_invalid_avatar_url_bare_https_is_rejected() {
+    // A bare `https://` with no hostname must be rejected by both validators.
+    let event = fixture_event(
+        include_str!(
+            "../../../tests/fixtures/team_catalog_content/invalid_avatar_url_bare_https.json"
+        )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_avatar_url_bare_https.json must be rejected"
+    );
+}
+
+#[test]
+fn test_fixture_invalid_avatar_url_whitespace_in_url_is_rejected() {
+    // An HTTPS URL containing a space must be rejected.
+    let event = fixture_event(
+        include_str!(
+        "../../../tests/fixtures/team_catalog_content/invalid_avatar_url_whitespace_in_url.json"
+    )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_avatar_url_whitespace_in_url.json must be rejected"
+    );
+}
+
+#[test]
+fn test_fixture_invalid_avatar_url_https_over_2048_is_rejected() {
+    // An HTTPS URL exceeding 2 048 chars must be rejected — exact parity with
+    // the TypeScript `isSafeHttpUrl` length cap.
+    let event = fixture_event(
+        include_str!(
+            "../../../tests/fixtures/team_catalog_content/invalid_avatar_url_https_over_2048.json"
+        )
+        .trim(),
+    );
+    assert!(
+        team_catalog_content_from_event(&event).is_err(),
+        "invalid_avatar_url_https_over_2048.json must be rejected"
+    );
+}

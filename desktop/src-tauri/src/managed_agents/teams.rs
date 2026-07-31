@@ -300,11 +300,11 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<Vec<St
     } else if let Some(catalog_source) = &team.catalog_source.clone() {
         // Catalog-adopted team: deactivate member copies whose provenance
         // matches this publication AND that no other remaining team still
-        // references (reference preservation — I6). Commit persona deactivation
-        // and team removal through the same byte-rollback boundary so a
-        // team-save failure cannot leave copies inactive while the team record
-        // survives.
+        // references AND that no standalone managed agent depends on.
+        // Reference preservation — if a managed agent was created from one of
+        // the copies, that copy must stay active so the agent keeps working.
         let mut personas = super::load_personas(app)?;
+        let managed_agents = crate::managed_agents::load_managed_agents(app)?;
 
         // The remaining teams AFTER this one is removed — used to check if
         // any copy is still referenced before deactivating it.
@@ -315,6 +315,7 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<Vec<St
             &catalog_source.owner_pubkey,
             &catalog_source.team_d_tag,
             &remaining_teams,
+            &managed_agents,
         );
 
         // Remove the team record from the working slice; save both atomically.
@@ -355,18 +356,21 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<Vec<St
 }
 
 /// Deactivate non-built-in personas whose provenance matches
-/// `(owner_pubkey, team_d_tag)` AND that are not referenced by any of the
-/// remaining teams.
+/// `(owner_pubkey, team_d_tag)` AND that are not referenced by any remaining
+/// team's `persona_ids` or any managed agent's `persona_id`.
 ///
-/// A persona copy is "referenced" when it appears in `remaining_team.persona_ids`.
-/// Keeping a referenced copy active prevents breaking a team that shares the
-/// same persona from a different (still-present) catalog addition. Returns
-/// `true` when any record was changed.
+/// A persona copy is "referenced" when it appears in a remaining team's
+/// `persona_ids`, or when a managed agent was created from it
+/// (`ManagedAgentRecord.persona_id == Some(copy.id)`). The agent case is
+/// critical: deleting a catalog team must not archive a copy that a standalone
+/// managed agent depends on — doing so leaves the agent pointing at a hidden
+/// inactive definition. Returns `true` when any record was changed.
 pub(crate) fn deactivate_catalog_member_copies_with_ref_check(
     personas: &mut [super::AgentDefinition],
     owner_pubkey: &str,
     team_d_tag: &str,
     remaining_teams: &[&super::TeamRecord],
+    managed_agents: &[super::ManagedAgentRecord],
 ) -> bool {
     let mut changed = false;
     for persona in personas.iter_mut() {
@@ -381,13 +385,18 @@ pub(crate) fn deactivate_catalog_member_copies_with_ref_check(
             continue;
         }
         // Skip copies still referenced by another remaining team.
-        let still_referenced = remaining_teams
+        let still_in_team = remaining_teams
             .iter()
             .any(|t| t.persona_ids.iter().any(|id| id == &persona.id));
-        if !still_referenced {
-            persona.is_active = false;
-            changed = true;
+        // Skip copies that a standalone managed agent was created from.
+        let still_in_agent = managed_agents
+            .iter()
+            .any(|a| a.persona_id.as_deref() == Some(persona.id.as_str()));
+        if still_in_team || still_in_agent {
+            continue;
         }
+        persona.is_active = false;
+        changed = true;
     }
     changed
 }
@@ -443,11 +452,14 @@ pub(crate) fn delete_catalog_team_at(
     let mut personas_mut = personas;
     let remaining_teams: Vec<&TeamRecord> = teams.iter().filter(|t| t.id != team_id).collect();
 
+    // No managed agents in the test seam — pass an empty slice. Test coverage
+    // for the agent-reference preservation path lives in teams_tests.rs.
     deactivate_catalog_member_copies_with_ref_check(
         &mut personas_mut,
         &catalog_source.owner_pubkey,
         &catalog_source.team_d_tag,
         &remaining_teams,
+        &[],
     );
 
     let new_teams: Vec<TeamRecord> = teams.into_iter().filter(|t| t.id != team_id).collect();

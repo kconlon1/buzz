@@ -717,41 +717,11 @@ fn clone_provenance(value: &TeamMemberCatalogSource) -> TeamMemberCatalogSource 
     value.clone()
 }
 
-#[test]
-fn test_delete_then_re_add_reactivates_copies() {
-    // End-to-end lifecycle for F4: add a team, deactivate its copies (what
-    // delete_team_with_cascade does for catalog-adopted teams), then re-add the
-    // same publication. The re-add must reuse and reactivate the existing copies
-    // rather than minting duplicates.
-    use crate::managed_agents::deactivate_catalog_member_copies_with_ref_check;
-
-    let owner = "a".repeat(64);
-    let src = source(&owner);
-    let body = content(vec![member("mk1", "Do it.")]);
-
-    // Step 1: initial add
-    let initial = plan(&[], &[], &src, &body).stores.unwrap();
-    let (mut personas, mut teams) = initial;
-    assert_eq!(personas.len(), 1);
-    assert!(personas[0].is_active);
-    let copy_id = personas[0].id.clone();
-
-    // Step 2: simulate delete — deactivate the member copies and remove the team
-    let changed =
-        deactivate_catalog_member_copies_with_ref_check(&mut personas, &owner, TEAM_D_TAG, &[]);
-    assert!(changed, "deactivation must report a change");
-    assert!(!personas[0].is_active, "copy is deactivated after delete");
-    teams.clear();
-
-    // Step 3: re-add — must reactivate the existing copy, not mint a new one
-    let readd = plan(&personas, &teams, &src, &body)
-        .stores
-        .expect("re-add must compute new stores");
-    let (after_personas, _) = readd;
-    assert_eq!(after_personas.len(), 1, "no duplicate copies minted");
-    assert_eq!(after_personas[0].id, copy_id, "same record reused");
-    assert!(after_personas[0].is_active, "record is reactivated");
-}
+// test_delete_then_re_add_reactivates_copies was moved to tests_coverage.rs
+// as test_delete_catalog_team_seam_then_re_add_reactivates_copies, which
+// exercises the same lifecycle through the file-based delete_catalog_team_at
+// seam rather than calling deactivate_catalog_member_copies_with_ref_check
+// directly.
 
 // ── commit_stores: byte-level rollback coverage ───────────────────────────
 

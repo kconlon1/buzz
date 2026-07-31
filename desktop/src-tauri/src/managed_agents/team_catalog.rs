@@ -332,7 +332,9 @@ pub fn local_member_projection_hash(record: &AgentDefinition) -> String {
 /// share the same set of permitted forms so a publisher and a TS-side display
 /// reader agree on what "safe" means:
 ///
-/// - `http://` or `https://` URLs (any length within `MAX_AVATAR_URL_BYTES`)
+/// - `http://` or `https://` URLs: ≤ 2 048 chars, must parse as a valid URL
+///   (no bare `https://`), and must not contain whitespace or parentheses —
+///   exact parity with the TypeScript `isSafeHttpUrl` predicate.
 /// - Inline SVG: `data:image/svg+xml,…` up to 8 192 chars
 /// - Inline raster (png/jpeg/gif/webp): `data:image/<type>;base64,<B64>` up
 ///   to 256 KiB with strict base64 shape
@@ -343,8 +345,29 @@ pub fn is_safe_catalog_avatar_url(url: &str) -> bool {
     const INLINE_SVG_PREFIX: &str = "data:image/svg+xml,";
     const MAX_INLINE_SVG_LEN: usize = 8_192;
     const MAX_INLINE_RASTER_LEN: usize = 256 * 1_024;
+    /// TypeScript caps HTTP/HTTPS URLs at 2 048 chars (`isSafeHttpUrl`).
+    const MAX_HTTP_URL_LEN: usize = 2_048;
 
     if url.starts_with("https://") || url.starts_with("http://") {
+        // Enforce the TypeScript-identical contract:
+        //   - length ≤ 2 048 chars
+        //   - no whitespace or parentheses
+        //   - well-formed URL (minimal hostname after the scheme)
+        if url.len() > MAX_HTTP_URL_LEN {
+            return false;
+        }
+        if url
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b == b'(' || b == b')')
+        {
+            return false;
+        }
+        // Reject bare prefixes like `https://` with nothing after — a minimal
+        // valid HTTP URL needs at least a hostname (e.g. `http://a`).
+        let path_start = if url.starts_with("https://") { 8 } else { 7 };
+        if url.len() <= path_start {
+            return false;
+        }
         return true;
     }
     if url.starts_with(INLINE_SVG_PREFIX) {
@@ -511,6 +534,10 @@ fn validate_member(member: &TeamCatalogMember) -> Result<(), String> {
 /// acceptance, because many individually-legal members still sum past the
 /// ceiling.
 pub fn validate_team_catalog_content(content: &TeamCatalogContent) -> Result<(), String> {
+    // Non-empty trimmed name — exact parity with the TS reader which checks
+    // `parsed.name.trim().length > 0`. A blank name persisted via a direct
+    // backend add would be invisible in the catalog UI.
+    non_empty(content.name.trim(), "the team name")?;
     bounded(&content.name, MAX_NAME_BYTES, "the team name")?;
     if let Some(description) = &content.description {
         bounded(description, MAX_TEXT_BYTES, "the team description")?;
