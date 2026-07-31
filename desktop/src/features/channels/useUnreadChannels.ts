@@ -52,6 +52,7 @@ export {
   readActivityFromStorage,
   writeActivityToStorage,
 } from "@/features/channels/threadActivityStorage";
+import { useObservedUnreadPersistence } from "@/features/channels/useObservedUnreadPersistence";
 
 type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
   pubkey?: string;
@@ -171,13 +172,9 @@ export function useUnreadChannels(
     getOwnTimestamp,
   } = useReadState(pubkey, relayClient);
 
-  // Observed "latest external trigger event" per channel (unix seconds). This
-  // is *derived relay evidence*, not source-of-truth: it's populated from a
-  // one-shot catch-up REQ per channel (keyed on the NIP-RS read marker) plus
-  // ongoing live events. The only thing we ever do with it is compare against
-  // the NIP-RS read marker — see the unread memo below. Reset on identity
-  // change. Stale entries for channels the user has left are silently
-  // ignored by the memo (it iterates the current channels list, not the map).
+  // Per-channel latest observed external trigger timestamp (unix seconds) and
+  // per-event metadata. Derived relay evidence, not source-of-truth; the unread
+  // memo compares these against NIP-RS markers. Hydrated/reset by the persistence hook.
   const latestByChannelRef = React.useRef(new Map<string, number>());
   const observedUnreadEventsByChannelRef = React.useRef(
     new Map<string, Map<string, ObservedUnreadEvent>>(),
@@ -186,13 +183,9 @@ export function useUnreadChannels(
   const channelsRef = React.useRef(channels);
   channelsRef.current = channels;
 
-  // Channels manually marked unread this session (e.g., right-click → "mark
-  // unread"). Because NIP-RS read markers are monotonic, this flag is what
-  // makes the badge appear without lowering synced read state. Each entry
-  // stores the channel's NIP-RS read marker (unix seconds) at force-time, or
-  // null if no marker existed yet. Persisted to localStorage
-  // (buzz-forced-unread.v1) so it survives reload and is visible to the rail
-  // observer for inactive communities.
+  // Channels manually marked unread this session. NIP-RS markers are monotonic,
+  // so this flag creates the badge without lowering synced read state.
+  // Persisted to buzz-forced-unread.v1 for cross-reload and rail-observer visibility.
   const forcedUnreadRef = React.useRef<ForcedUnreadMap>(
     pubkey ? forcedUnreadStore.read(pubkey) : {},
   );
@@ -266,13 +259,24 @@ export function useUnreadChannels(
     0,
   );
 
+  // Persistence layer: hydration, pagehide flush, scope fence, write-through, marker-prune.
+  const observedPersistence = useObservedUnreadPersistence(
+    normalizedPubkey,
+    normalizedRelayUrl,
+    isReadStateReady,
+    readStateVersion,
+    getEffectiveTimestamp,
+    getOwnTimestamp,
+    observedUnreadEventsByChannelRef,
+    latestByChannelRef,
+    { onPruned: bumpLatestVersion },
+  );
+
   // Reset all in-session state when the identity or relay changes. In-memory
   // caches are cleared; persisted stores are loaded for the new pubkey (so
   // forced-unread, participation, etc. are correct for the new identity).
   // biome-ignore lint/correctness/useExhaustiveDependencies: pubkey/relayClient are intentional reset signals
   React.useEffect(() => {
-    latestByChannelRef.current = new Map();
-    observedUnreadEventsByChannelRef.current = new Map();
     // Load persisted forced-unread map for the new pubkey (do NOT clear the
     // store — another device's data should survive identity switches here).
     forcedUnreadRef.current = pubkey ? forcedUnreadStore.read(pubkey) : {};
@@ -296,16 +300,9 @@ export function useUnreadChannels(
     bumpMembershipVersion();
   }, [pubkey, relayClient, normalizedRelayUrl]);
 
-  // `topLevelOnly` is the passive channel-open path (NIP-RS Option 1): the
-  // caller's `readAt` is already the newest TOP-LEVEL message, so the marker
-  // must land exactly there without folding in `observedLatest` (which counts
-  // thread replies) and without clearing observed refs. Leaving the refs intact
-  // keeps the sidebar dot lit for a channel whose only unread is an unopened
-  // thread reply — viewing the channel no longer absorbs the reply, so the dot
-  // persists until an explicit mark-read (Esc, sidebar, mark-all) or a newer
-  // top-level message advances the channel marker past it. Those explicit
-  // "mark read" actions omit the flag and keep the fold, since they mean
-  // "clear everything in this channel."
+  // `topLevelOnly`: passive channel-open path (NIP-RS Option 1) — marker lands at newest
+  // top-level msg without folding observed replies; leaves refs intact so the dot persists
+  // until an explicit mark-read. Explicit reads omit this flag and clear the refs.
   const markChannelRead = React.useCallback(
     (
       channelId: string,
@@ -336,10 +333,11 @@ export function useUnreadChannels(
       if (clearObserved) {
         latestByChannelRef.current.delete(channelId);
         observedUnreadEventsByChannelRef.current.delete(channelId);
+        observedPersistence.removeChannel(channelId);
         bumpLatestVersion();
       }
     },
-    [markContextRead, pubkey],
+    [markContextRead, observedPersistence, pubkey],
   );
 
   // Manually mark a channel unread (e.g., right-click → "mark unread"). Persists
@@ -381,21 +379,21 @@ export function useUnreadChannels(
     [normalizedPubkey],
   );
 
-  // Feed the in-session "latest external trigger" map from live channel
-  // events. Composes with any caller-supplied onChannelMessage handler.
-  // useLiveChannelUpdates already filters this callback to trigger kinds
-  // and external authors, so the map is always a strict subset of "newest
-  // external trigger message this client has observed."
+  // Records an external trigger event and schedules persistence.
   const callerOnChannelMessage = liveUpdateOptions.onChannelMessage;
   const recordUnreadEvent = React.useCallback(
-    (channelId: string, event: ObservedUnreadEvent) =>
-      recordObservedUnreadEvent(
+    (channelId: string, event: ObservedUnreadEvent): boolean => {
+      const didRecord = recordObservedUnreadEvent(
         observedUnreadEventsByChannelRef.current,
         channelId,
         event,
         CATCH_UP_LIMIT,
-      ),
-    [],
+      );
+      if (didRecord)
+        observedPersistence.schedule(observedPersistence.currentScope);
+      return didRecord;
+    },
+    [observedPersistence],
   );
   const handleChannelMessage = React.useCallback(
     (channelId: string, event: RelayEvent) => {
@@ -967,8 +965,9 @@ export function useUnreadChannels(
     if (pubkey) {
       forcedUnreadStore.write(pubkey, forcedUnreadRef.current);
     }
+    observedPersistence.clearAll();
     bumpLatestVersion();
-  }, [getEffectiveTimestamp, markContextRead, pubkey]);
+  }, [getEffectiveTimestamp, markContextRead, observedPersistence, pubkey]);
 
   // Identity-stable snapshots of the membership sets for the notify gate.
   // Re-derived only when membershipVersion bumps (a set actually changed), so
