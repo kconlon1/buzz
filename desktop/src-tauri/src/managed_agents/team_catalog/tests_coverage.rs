@@ -152,7 +152,6 @@ fn test_tombstone_transaction_rolls_back_delete_when_insert_fails() {
 
 /// Deserialize a JSON fixture body into a signed event for validation testing.
 fn fixture_event(content_str: &str) -> nostr::Event {
-    use nostr::JsonUtil;
     let keys = nostr::Keys::generate();
     nostr::EventBuilder::new(nostr::Kind::Custom(30178u16), content_str)
         .sign_with_keys(&keys)
